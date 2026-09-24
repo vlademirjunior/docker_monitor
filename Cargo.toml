@@ -1,0 +1,31 @@
+[package]
+name = "docker_monitor" # nome do projeto e do executavel gerado ao compilar.
+version = "0.1.2" # versão do meu projeto
+license = "MIT"
+edition = "2024" # para garantir o acesso a features e comportamentos mais modernos da linguagem
+
+[dependencies]
+# Base do tutorial (https://rustlang.com.br/projetos/container-stats/)
+# Nota: usa rustls em vez de native-tls para não exigir OpenSSL do sistema.
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+colored = "2.1"
+clap = { version = "4.5", features = ["derive", "env"] }
+# dashboard TUI
+ratatui = "0.29"
+crossterm = "0.28"
+# Logs em arquivo diário
+chrono = "0.4"
+
+[target.'cfg(unix)'.dependencies] # Esse bloco só é compilado em sistemas Unix, como Linux e macOS, porque implementa a comunicação com o Docker por meio do socket docker.sock.
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio", "http1"] }
+hyperlocal = "0.9"
+http-body-util = "0.1"
+http = "1"
+bytes = "1"
+tokio = { version = "1", features = ["rt", "net", "macros", "time"] }
+
+[dev-dependencies]
+tempfile = "3"

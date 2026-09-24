@@ -1,0 +1,7 @@
+# Cross-compilação para Windows a partir do Linux.
+#
+# Requer o alvo Rust + o linker MinGW no PATH:
+#   rustup target add x86_64-pc-windows-gnu
+#   sudo apt install gcc-mingw-w64-x86-64   # Debian/Ubuntu
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"

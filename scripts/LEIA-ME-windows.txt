@@ -1,0 +1,62 @@
+docker_monitor __VERSAO__ — Windows x86_64
+==========================================
+
+Monitor de containers Docker: listagem, estatísticas, logs, stacks
+docker-compose e dashboard TUI em tempo real.
+
+Requisito: Docker Desktop em execução. Não precisa de Rust instalado.
+
+INSTALAÇÃO (3 passos)
+---------------------
+1. Extraia este .zip (botão direito > Extrair tudo) e abra um terminal
+   (PowerShell ou CMD) na pasta extraída.
+
+2. Instale (copia para %LOCALAPPDATA%\docker_monitor\bin, configura o
+   PATH do usuário e cria o atalho `dm`):
+
+       .\docker_monitor.exe setup
+
+   Para ver antes o que será feito, sem alterar nada:
+
+       .\docker_monitor.exe setup --sim
+
+   A instalação é idempotente: pode rodar de novo para atualizar.
+
+3. Reabra o terminal e teste:
+
+       dm --version
+
+ACESSO AO DOCKER (uma vez)
+--------------------------
+No Windows, o programa fala com o daemon via TCP. No Docker Desktop:
+
+  Settings > General > ative "Expose daemon on tcp://localhost:2375
+  without TLS" > Apply & restart.
+
+Depois teste:
+
+       dm listar
+
+Se essa opção não existir no seu Docker Desktop (ela varia conforme o
+backend), exponha o daemon em TCP pelo backend em uso e informe o
+endereço com --url ou DOCKER_HOST, por exemplo:
+
+       dm --url http://localhost:2375 listar
+
+Suporte direto a named pipe (//./pipe/docker_engine) está planejado
+para uma versão futura.
+
+VERIFICAR INTEGRIDADE
+---------------------
+No PowerShell, na pasta extraída, compare o hash do executável com o
+valor registrado em sha256sums.txt:
+
+       (Get-FileHash docker_monitor.exe -Algorithm SHA256).Hash
+
+COMANDOS ÚTEIS
+--------------
+  dm listar --todos   lista containers (inclui parados)
+  dm stats            CPU/memória de todos os containers
+  dm dashboard        interface interativa em tempo real
+  dm stacks listar    stacks docker-compose do workspace
+  dm --help           ajuda completa

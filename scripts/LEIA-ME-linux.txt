@@ -1,0 +1,43 @@
+docker_monitor __VERSAO__ — Linux x86_64
+========================================
+
+Monitor de containers Docker: listagem, estatísticas, logs, stacks
+docker-compose e dashboard TUI em tempo real.
+
+Requisito: Docker em execução e acesso ao socket
+(usuário no grupo `docker`). Não precisa de Rust instalado.
+
+INSTALAÇÃO (3 passos)
+---------------------
+1. Extraia este pacote (gera docker_monitor, LEIA-ME.txt e sha256sums.txt):
+
+       tar -xzf __ARQUIVO__
+
+2. Instale (copia para ~/.local/bin, configura o PATH e cria o atalho `dm`):
+
+       ./docker_monitor setup
+
+   Para ver antes o que será feito, sem alterar nada:
+
+       ./docker_monitor setup --sim
+
+   A instalação é idempotente: pode rodar de novo para atualizar.
+
+3. Reabra o terminal e teste:
+
+       dm --version
+       dm listar --todos
+
+VERIFICAR INTEGRIDADE
+---------------------
+Na pasta extraída:
+
+       sha256sum -c sha256sums.txt
+
+COMANDOS ÚTEIS
+--------------
+  dm listar --todos   lista containers (inclui parados)
+  dm stats            CPU/memória de todos os containers
+  dm dashboard        interface interativa em tempo real
+  dm stacks listar    stacks docker-compose do workspace
+  dm --help           ajuda completa

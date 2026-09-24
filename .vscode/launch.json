@@ -1,0 +1,26 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug docker_monitor",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=docker_monitor",
+                    "--package=docker_monitor"
+                ],
+                "filter": {
+                    "name": "docker_monitor",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "listar",
+                "--todos"
+            ], // permite rodar o debug direto no botão na main pelo CodeLLDB
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
