@@ -14,6 +14,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Histórico + tags completos: `gh release create` precisa resolver a
+          # tag no remoto e `--generate-notes` compara com a release anterior.
+          fetch-depth: 0
 
       - name: Instalar Rust + alvo Windows
         run: |

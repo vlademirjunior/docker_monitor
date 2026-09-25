@@ -1,6 +1,7 @@
 # docker_monitor (dm)
 
 [![Rust](https://github.com/vlademirjunior/docker_monitor/actions/workflows/rust.yml/badge.svg)](https://github.com/vlademirjunior/docker_monitor/actions/workflows/rust.yml)
+[![Release](https://github.com/vlademirjunior/docker_monitor/actions/workflows/release.yml/badge.svg)](https://github.com/vlademirjunior/docker_monitor/actions/workflows/release.yml)
 [![GitHubTree](https://img.shields.io/badge/GitHubTree-docker__monitor-blue?style=flat-square)](https://githubtree.mgks.dev/repo/vlademirjunior/docker_monitor/main/?ref=badge)
 
 Ferramenta de linha de comando e dashboard TUI para monitorar e administrar containers Docker e stacks Docker Compose. Lista e inspeciona containers, exibe logs e estatísticas de CPU e memória, identifica imagens não utilizadas e permite iniciar, parar, reiniciar e remover containers.
