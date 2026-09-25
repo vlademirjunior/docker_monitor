@@ -53,10 +53,21 @@ valor registrado em sha256sums.txt:
 
        (Get-FileHash docker_monitor.exe -Algorithm SHA256).Hash
 
+ATUALIZAR
+---------
+Com o programa instalado, basta:
+
+       dm update
+
+Para só consultar (sem alterar nada):
+
+       dm update --check
+
 COMANDOS ÚTEIS
 --------------
   dm listar --todos   lista containers (inclui parados)
   dm stats            CPU/memória de todos os containers
   dm dashboard        interface interativa em tempo real
   dm stacks listar    stacks docker-compose do workspace
+  dm update           atualiza para a versão mais recente
   dm --help           ajuda completa

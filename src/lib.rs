@@ -30,6 +30,9 @@
 //! - **Registro em Logs Rotativos Diários**: Logs persistentes com retenção automática de um dia ([`logger`]).
 //! - **Auto-instalação**: Instalação do binário no `PATH` do usuário com o
 //!   atalho `dm` ([`setup`]), idempotente e com simulação (`--sim`).
+//! - **Auto-atualização**: Upgrade para a release publicada mais recente
+//!   com verificação de checksum ([`atualizar`]), idempotente e com
+//!   consulta pura (`--check`).
 //!
 //! ## Arquitetura do Dashboard em Tempo Real
 //!
@@ -98,6 +101,7 @@
 //! # }
 //! ```
 
+pub mod atualizar;
 pub mod client;
 pub mod dashboard;
 pub mod docker_api;

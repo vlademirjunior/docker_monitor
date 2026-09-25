@@ -39,3 +39,8 @@ Para gerar os pacotes Linux e Windows, instale o alvo `x86_64-pc-windows-gnu` e 
 ```
 
 Os artefatos gerados ficam em `dist/` e incluem checksums.
+
+Para publicar uma release, suba a tag `vX.Y.Z` correspondente à versão de
+`Cargo.toml`: o workflow `Release` gera os pacotes e os anexa à GitHub
+Release. Não commite binários em `dist/` pois eles são artefatos de release,
+consumidos pelo `dm update`.

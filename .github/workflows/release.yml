@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Rust + alvo Windows
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add x86_64-pc-windows-gnu
+
+      - name: Instalar linker MinGW
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: Validar tag contra Cargo.toml
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSAO="$(grep -m1 '^version *= *"' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "Tag: $TAG | Cargo.toml: $VERSAO"
+          [ "$TAG" = "$VERSAO" ] || {
+            echo "ERRO: tag v$TAG difere da versão $VERSAO em Cargo.toml." >&2
+            echo "Atualize a versão em Cargo.toml (e o CHANGELOG) antes de subir a tag." >&2
+            exit 1
+          }
+
+      - name: Gerar pacotes (build-dist)
+        run: ./scripts/build-dist.sh
+
+      - name: Criar GitHub Release com os pacotes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSAO="$(grep -m1 '^version *= *"' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "docker_monitor $VERSAO" \
+            --generate-notes \
+            dist/docker_monitor-*-linux-x86_64.tar.gz \
+            dist/docker_monitor-*-windows-x86_64.zip \
+            dist/sha256sums.txt

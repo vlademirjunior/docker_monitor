@@ -48,8 +48,8 @@ use std::time::{Duration, Instant};
 
 use crate::client::Cliente;
 use crate::docker_api::{
-    DetalhesContainer, InfoHost, UsoDiscoDocker, calcular_uso_cpu, calcular_uso_memoria,
-    memoria_efetiva,
+    ContainerResumo, DetalhesContainer, InfoHost, UsoDiscoDocker, calcular_uso_cpu,
+    calcular_uso_memoria, memoria_efetiva,
 };
 use crate::formatador::formatar_bytes;
 use crate::logger;
@@ -209,8 +209,15 @@ impl FiltroStatus {
     pub fn corresponde(self, estado: &str) -> bool {
         match self {
             FiltroStatus::Todos => true,
-            FiltroStatus::Rodando => estado == "running",
-            FiltroStatus::Parados => estado != "running" && estado != "paused",
+            FiltroStatus::Rodando => {
+                estado == "running" || estado == "stopping" || estado == "restarting"
+            }
+            FiltroStatus::Parados => {
+                estado != "running"
+                    && estado != "paused"
+                    && estado != "stopping"
+                    && estado != "restarting"
+            }
             FiltroStatus::Pausados => estado == "paused",
         }
     }
@@ -551,7 +558,21 @@ fn rodar_dashboard(
         // 1. Recebe todas as mensagens pendentes do background worker sem bloquear
         while let Ok(resposta) = rx_resposta.try_recv() {
             match resposta {
-                RespostaWorker::Dados(dados) => {
+                RespostaWorker::Dados(mut dados) => {
+                    if dados.novas_amostras.is_empty() && !linhas_containers.is_empty() {
+                        for nova in &mut dados.containers {
+                            if let Some(antiga) =
+                                linhas_containers.iter().find(|a| a.id_completo == nova.id_completo)
+                            {
+                                if nova.estado == "running" && antiga.estado == "running" {
+                                    nova.cpu = antiga.cpu;
+                                    nova.mem_mb = antiga.mem_mb;
+                                    nova.mem_limite_mb = antiga.mem_limite_mb;
+                                    nova.mem_pct = antiga.mem_pct;
+                                }
+                            }
+                        }
+                    }
                     linhas_containers = dados.containers;
                     linhas_stacks = dados.stacks;
                     if dados.info_host.is_some() {
@@ -792,6 +813,12 @@ fn rodar_dashboard(
                                     tipo: TipoBanner::Aguardando,
                                     expira_em: None,
                                 });
+                                if let Some(linha) =
+                                    linhas_containers.iter_mut().find(|l| l.id_completo == id)
+                                {
+                                    linha.estado = "starting".to_string();
+                                    linha.status_desc = "Iniciando...".to_string();
+                                }
                                 tx_comando.send(ComandoWorker::IniciarContainer(id)).ok();
                             }
                             AcaoContainer::Parar => {
@@ -800,6 +827,12 @@ fn rodar_dashboard(
                                     tipo: TipoBanner::Aguardando,
                                     expira_em: None,
                                 });
+                                if let Some(linha) =
+                                    linhas_containers.iter_mut().find(|l| l.id_completo == id)
+                                {
+                                    linha.estado = "stopping".to_string();
+                                    linha.status_desc = "Parando...".to_string();
+                                }
                                 tx_comando.send(ComandoWorker::PararContainer(id)).ok();
                             }
                             AcaoContainer::Reiniciar => {
@@ -808,6 +841,12 @@ fn rodar_dashboard(
                                     tipo: TipoBanner::Aguardando,
                                     expira_em: None,
                                 });
+                                if let Some(linha) =
+                                    linhas_containers.iter_mut().find(|l| l.id_completo == id)
+                                {
+                                    linha.estado = "restarting".to_string();
+                                    linha.status_desc = "Reiniciando...".to_string();
+                                }
                                 tx_comando.send(ComandoWorker::ReiniciarContainer(id)).ok();
                             }
                         }
@@ -839,6 +878,14 @@ fn rodar_dashboard(
                                     tipo: TipoBanner::Aguardando,
                                     expira_em: None,
                                 });
+                                if let Some(linha) = linhas_stacks
+                                    .iter_mut()
+                                    .find(|l| l.stack.arquivo == stack.arquivo)
+                                {
+                                    for (_, estado) in &mut linha.servicos {
+                                        *estado = "starting".to_string();
+                                    }
+                                }
                                 tx_comando
                                     .send(ComandoWorker::IniciarStack { stack, profile })
                                     .ok();
@@ -849,6 +896,14 @@ fn rodar_dashboard(
                                     tipo: TipoBanner::Aguardando,
                                     expira_em: None,
                                 });
+                                if let Some(linha) = linhas_stacks
+                                    .iter_mut()
+                                    .find(|l| l.stack.arquivo == stack.arquivo)
+                                {
+                                    for (_, estado) in &mut linha.servicos {
+                                        *estado = "stopping".to_string();
+                                    }
+                                }
                                 tx_comando
                                     .send(ComandoWorker::PararStack { stack, profile })
                                     .ok();
@@ -862,6 +917,14 @@ fn rodar_dashboard(
                                     tipo: TipoBanner::Aguardando,
                                     expira_em: None,
                                 });
+                                if let Some(linha) = linhas_stacks
+                                    .iter_mut()
+                                    .find(|l| l.stack.arquivo == stack.arquivo)
+                                {
+                                    for (_, estado) in &mut linha.servicos {
+                                        *estado = "restarting".to_string();
+                                    }
+                                }
                                 tx_comando
                                     .send(ComandoWorker::ReiniciarStack { stack, profile })
                                     .ok();
@@ -944,6 +1007,12 @@ fn rodar_dashboard(
                             tipo: TipoBanner::Aguardando,
                             expira_em: None,
                         });
+                        if let Some(linha) =
+                            linhas_containers.iter_mut().find(|l| l.id_completo == id)
+                        {
+                            linha.estado = "stopping".to_string();
+                            linha.status_desc = "Parando...".to_string();
+                        }
                         tx_comando.send(ComandoWorker::PararContainer(id)).ok();
                         continue;
                     }
@@ -960,6 +1029,12 @@ fn rodar_dashboard(
                             tipo: TipoBanner::Aguardando,
                             expira_em: None,
                         });
+                        if let Some(linha) =
+                            linhas_containers.iter_mut().find(|l| l.id_completo == id)
+                        {
+                            linha.estado = "restarting".to_string();
+                            linha.status_desc = "Reiniciando...".to_string();
+                        }
                         tx_comando.send(ComandoWorker::ReiniciarContainer(id)).ok();
                         continue;
                     }
@@ -987,6 +1062,14 @@ fn rodar_dashboard(
                             tipo: TipoBanner::Aguardando,
                             expira_em: None,
                         });
+                        if let Some(linha) = linhas_stacks
+                            .iter_mut()
+                            .find(|l| l.stack.arquivo == stack.arquivo)
+                        {
+                            for (_, estado) in &mut linha.servicos {
+                                *estado = "stopping".to_string();
+                            }
+                        }
                         tx_comando
                             .send(ComandoWorker::PararStack { stack, profile })
                             .ok();
@@ -1016,6 +1099,14 @@ fn rodar_dashboard(
                             tipo: TipoBanner::Aguardando,
                             expira_em: None,
                         });
+                        if let Some(linha) = linhas_stacks
+                            .iter_mut()
+                            .find(|l| l.stack.arquivo == stack.arquivo)
+                        {
+                            for (_, estado) in &mut linha.servicos {
+                                *estado = "restarting".to_string();
+                            }
+                        }
                         tx_comando
                             .send(ComandoWorker::ReiniciarStack { stack, profile })
                             .ok();
@@ -1321,7 +1412,64 @@ fn worker_loop(
     tx_resposta: Sender<RespostaWorker>,
 ) {
     let mut coletor_app = ColetorMetricasApp::new();
-    executar_coleta_e_enviar(&cliente, &workspace, &tx_resposta, &mut coletor_app);
+    let mut stacks_cache = stacks::varrer_workspace(&workspace);
+    let mut ultimo_scan_stacks = Instant::now();
+    let mut info_host_cache = cliente.obter_info_host().ok();
+    let mut ultimo_scan_host = Instant::now();
+    let mut uso_disco_cache = cliente.obter_uso_disco().ok();
+    let mut ultimo_scan_disco = Instant::now();
+
+    // 1. STARTUP INSTANTÂNEO (< 30ms):
+    // Envia imediatamente os containers existentes e stacks para a UI pintar a tela sem espera
+    if let Ok(containers_iniciais) = cliente.listar_containers(true) {
+        let linhas_iniciais: Vec<LinhaContainer> = containers_iniciais
+            .iter()
+            .map(|c| {
+                let id_curto = c.id[..12.min(c.id.len())].to_string();
+                let nome = c
+                    .names
+                    .first()
+                    .map(|n| n.trim_start_matches('/').to_string())
+                    .unwrap_or_else(|| id_curto.clone());
+                let stack_nome = c.labels.get("com.docker.compose.project").cloned();
+                LinhaContainer {
+                    id_completo: c.id.clone(),
+                    id_curto,
+                    nome,
+                    imagem: c.image.clone(),
+                    estado: c.state.clone(),
+                    status_desc: c.status.clone(),
+                    stack: stack_nome,
+                    cpu: 0.0,
+                    mem_mb: 0.0,
+                    mem_limite_mb: 0.0,
+                    mem_pct: 0.0,
+                }
+            })
+            .collect();
+        let linhas_stacks_iniciais = montar_linhas_stacks(&stacks_cache, &containers_iniciais);
+
+        tx_resposta
+            .send(RespostaWorker::Dados(Box::new(DadosWorker {
+                containers: linhas_iniciais,
+                stacks: linhas_stacks_iniciais,
+                novas_amostras: Vec::new(),
+                info_host: None,
+                uso_disco: None,
+                metricas_app: None,
+            })))
+            .ok();
+    }
+
+    // Primeira coleta com cálculo de CPU/RAM em paralelo
+    executar_coleta_e_enviar(
+        &cliente,
+        &stacks_cache,
+        info_host_cache.clone(),
+        uso_disco_cache.clone(),
+        &tx_resposta,
+        &mut coletor_app,
+    );
     let mut proxima_coleta = Instant::now() + intervalo;
 
     loop {
@@ -1329,7 +1477,21 @@ fn worker_loop(
         match rx_comando.recv_timeout(timeout) {
             Ok(ComandoWorker::Sair) => break,
             Ok(ComandoWorker::Atualizar) => {
-                executar_coleta_e_enviar(&cliente, &workspace, &tx_resposta, &mut coletor_app);
+                stacks_cache = stacks::varrer_workspace(&workspace);
+                ultimo_scan_stacks = Instant::now();
+                info_host_cache = cliente.obter_info_host().ok();
+                ultimo_scan_host = Instant::now();
+                uso_disco_cache = cliente.obter_uso_disco().ok();
+                ultimo_scan_disco = Instant::now();
+
+                executar_coleta_e_enviar(
+                    &cliente,
+                    &stacks_cache,
+                    info_host_cache.clone(),
+                    uso_disco_cache.clone(),
+                    &tx_resposta,
+                    &mut coletor_app,
+                );
                 proxima_coleta = Instant::now() + intervalo;
             }
             Ok(ComandoWorker::IniciarContainer(id)) => {
@@ -1352,7 +1514,7 @@ fn worker_loop(
                             .ok();
                     }
                 }
-                executar_coleta_e_enviar(&cliente, &workspace, &tx_resposta, &mut coletor_app);
+                enviar_atualizacao_rapida_containers(&cliente, &stacks_cache, None, &tx_resposta);
                 proxima_coleta = Instant::now() + intervalo;
             }
             Ok(ComandoWorker::PararContainer(id)) => {
@@ -1375,7 +1537,7 @@ fn worker_loop(
                             .ok();
                     }
                 }
-                executar_coleta_e_enviar(&cliente, &workspace, &tx_resposta, &mut coletor_app);
+                enviar_atualizacao_rapida_containers(&cliente, &stacks_cache, None, &tx_resposta);
                 proxima_coleta = Instant::now() + intervalo;
             }
             Ok(ComandoWorker::ReiniciarContainer(id)) => {
@@ -1398,7 +1560,7 @@ fn worker_loop(
                             .ok();
                     }
                 }
-                executar_coleta_e_enviar(&cliente, &workspace, &tx_resposta, &mut coletor_app);
+                enviar_atualizacao_rapida_containers(&cliente, &stacks_cache, None, &tx_resposta);
                 proxima_coleta = Instant::now() + intervalo;
             }
             Ok(ComandoWorker::IniciarStack { stack, profile }) => {
@@ -1470,7 +1632,9 @@ fn worker_loop(
                             .ok();
                     }
                 }
-                executar_coleta_e_enviar(&cliente, &workspace, &tx_resposta, &mut coletor_app);
+                stacks_cache = stacks::varrer_workspace(&workspace);
+                ultimo_scan_stacks = Instant::now();
+                enviar_atualizacao_rapida_containers(&cliente, &stacks_cache, None, &tx_resposta);
                 proxima_coleta = Instant::now() + intervalo;
             }
             Ok(ComandoWorker::PararStack { stack, profile }) => {
@@ -1508,7 +1672,7 @@ fn worker_loop(
                             .ok();
                     }
                 }
-                executar_coleta_e_enviar(&cliente, &workspace, &tx_resposta, &mut coletor_app);
+                enviar_atualizacao_rapida_containers(&cliente, &stacks_cache, None, &tx_resposta);
                 proxima_coleta = Instant::now() + intervalo;
             }
             Ok(ComandoWorker::ReiniciarStack { stack, profile }) => {
@@ -1546,7 +1710,7 @@ fn worker_loop(
                             .ok();
                     }
                 }
-                executar_coleta_e_enviar(&cliente, &workspace, &tx_resposta, &mut coletor_app);
+                enviar_atualizacao_rapida_containers(&cliente, &stacks_cache, None, &tx_resposta);
                 proxima_coleta = Instant::now() + intervalo;
             }
             Ok(ComandoWorker::DerrubarStack {
@@ -1589,7 +1753,7 @@ fn worker_loop(
                             .ok();
                     }
                 }
-                executar_coleta_e_enviar(&cliente, &workspace, &tx_resposta, &mut coletor_app);
+                enviar_atualizacao_rapida_containers(&cliente, &stacks_cache, None, &tx_resposta);
                 proxima_coleta = Instant::now() + intervalo;
             }
             Ok(ComandoWorker::RemoverContainer { id, forcar }) => {
@@ -1615,7 +1779,7 @@ fn worker_loop(
                             .ok();
                     }
                 }
-                executar_coleta_e_enviar(&cliente, &workspace, &tx_resposta, &mut coletor_app);
+                enviar_atualizacao_rapida_containers(&cliente, &stacks_cache, None, &tx_resposta);
                 proxima_coleta = Instant::now() + intervalo;
             }
             Ok(ComandoWorker::PruneSistema) => {
@@ -1637,23 +1801,50 @@ fn worker_loop(
                             .ok();
                     }
                 }
-                executar_coleta_e_enviar(&cliente, &workspace, &tx_resposta, &mut coletor_app);
+                uso_disco_cache = cliente.obter_uso_disco().ok();
+                ultimo_scan_disco = Instant::now();
+                enviar_atualizacao_rapida_containers(&cliente, &stacks_cache, uso_disco_cache.clone(), &tx_resposta);
                 proxima_coleta = Instant::now() + intervalo;
             }
-            Ok(ComandoWorker::InspecionarContainer(id)) => match cliente.inspecionar(&id) {
-                Ok(detalhes) => {
-                    tx_resposta
-                        .send(RespostaWorker::DetalhesCarregados(Ok(Box::new(detalhes))))
-                        .ok();
-                }
-                Err(erro) => {
-                    tx_resposta
-                        .send(RespostaWorker::DetalhesCarregados(Err(erro.to_string())))
-                        .ok();
-                }
-            },
+            Ok(ComandoWorker::InspecionarContainer(id)) => {
+                let cliente_clone = cliente.clone();
+                let tx = tx_resposta.clone();
+                std::thread::spawn(move || {
+                    let res = cliente_clone
+                        .inspecionar(&id)
+                        .map(Box::new)
+                        .map_err(|e| e.to_string());
+                    tx.send(RespostaWorker::DetalhesCarregados(res)).ok();
+                });
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                executar_coleta_e_enviar(&cliente, &workspace, &tx_resposta, &mut coletor_app);
+                let agora = Instant::now();
+                if agora.duration_since(ultimo_scan_stacks) >= Duration::from_secs(60) {
+                    stacks_cache = stacks::varrer_workspace(&workspace);
+                    ultimo_scan_stacks = agora;
+                }
+                if agora.duration_since(ultimo_scan_host) >= Duration::from_secs(60) {
+                    info_host_cache = cliente.obter_info_host().ok();
+                    ultimo_scan_host = agora;
+                }
+                let uso_disco_envio = if agora.duration_since(ultimo_scan_disco)
+                    >= Duration::from_secs(45)
+                {
+                    uso_disco_cache = cliente.obter_uso_disco().ok();
+                    ultimo_scan_disco = agora;
+                    uso_disco_cache.clone()
+                } else {
+                    None
+                };
+
+                executar_coleta_e_enviar(
+                    &cliente,
+                    &stacks_cache,
+                    info_host_cache.clone(),
+                    uso_disco_envio,
+                    &tx_resposta,
+                    &mut coletor_app,
+                );
                 proxima_coleta = Instant::now() + intervalo;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -1677,14 +1868,103 @@ type ResultadoColeta = Result<
     Box<dyn std::error::Error>,
 >;
 
+/// Monta as linhas de stack a partir do cache de stacks e da lista de containers em memória.
+fn montar_linhas_stacks(
+    stacks_encontradas: &[stacks::Stack],
+    containers: &[ContainerResumo],
+) -> Vec<LinhaStack> {
+    let mut linhas_stacks = Vec::with_capacity(stacks_encontradas.len());
+
+    for stack in stacks_encontradas {
+        let mut total = 0;
+        let mut rodando = 0;
+        let mut servicos = Vec::new();
+
+        for c in containers {
+            if stacks::container_pertence_a_stack(&c.labels, stack) {
+                total += 1;
+                if c.state == "running" {
+                    rodando += 1;
+                }
+                let nome_c = c
+                    .labels
+                    .get("com.docker.compose.service")
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        c.names
+                            .first()
+                            .map(|n| n.trim_start_matches('/').to_string())
+                            .unwrap_or_else(|| c.id[..12.min(c.id.len())].to_string())
+                    });
+                servicos.push((nome_c, c.state.clone()));
+            }
+        }
+
+        linhas_stacks.push(LinhaStack {
+            stack: stack.clone(),
+            containers_total: total,
+            containers_rodando: rodando,
+            servicos,
+        });
+    }
+    linhas_stacks
+}
+
+/// Envia imediatamente a lista rápida de containers e stacks para a UI sem esperar por stats.
+fn enviar_atualizacao_rapida_containers(
+    cliente: &Cliente,
+    stacks_cache: &[stacks::Stack],
+    uso_disco: Option<UsoDiscoDocker>,
+    tx_resposta: &Sender<RespostaWorker>,
+) {
+    if let Ok(containers) = cliente.listar_containers(true) {
+        let mut linhas = Vec::with_capacity(containers.len());
+        for c in &containers {
+            let id_curto = c.id[..12.min(c.id.len())].to_string();
+            let nome = c
+                .names
+                .first()
+                .map(|n| n.trim_start_matches('/').to_string())
+                .unwrap_or_else(|| id_curto.clone());
+            let stack_nome = c.labels.get("com.docker.compose.project").cloned();
+            linhas.push(LinhaContainer {
+                id_completo: c.id.clone(),
+                id_curto,
+                nome,
+                imagem: c.image.clone(),
+                estado: c.state.clone(),
+                status_desc: c.status.clone(),
+                stack: stack_nome,
+                cpu: 0.0,
+                mem_mb: 0.0,
+                mem_limite_mb: 0.0,
+                mem_pct: 0.0,
+            });
+        }
+        let linhas_stacks = montar_linhas_stacks(stacks_cache, &containers);
+        tx_resposta
+            .send(RespostaWorker::Dados(Box::new(DadosWorker {
+                containers: linhas,
+                stacks: linhas_stacks,
+                novas_amostras: Vec::new(),
+                info_host: None,
+                uso_disco,
+                metricas_app: None,
+            })))
+            .ok();
+    }
+}
+
 /// Executa a coleta completa e envia o pacote de dados para a UI.
 fn executar_coleta_e_enviar(
     cliente: &Cliente,
-    workspace: &Path,
+    stacks_cache: &[stacks::Stack],
+    info_host: Option<InfoHost>,
+    uso_disco: Option<UsoDiscoDocker>,
     tx_resposta: &Sender<RespostaWorker>,
     coletor_app: &mut ColetorMetricasApp,
 ) {
-    match coletar_dados(cliente, workspace, coletor_app) {
+    match coletar_dados(cliente, stacks_cache, info_host, uso_disco, coletor_app) {
         Ok((containers, stacks, novas_amostras, info_host, uso_disco, metricas_app)) => {
             tx_resposta
                 .send(RespostaWorker::Dados(Box::new(DadosWorker {
@@ -1708,15 +1988,25 @@ fn executar_coleta_e_enviar(
     }
 }
 
-/// Coleta dados de todos os containers e stacks mapeadas no workspace.
+/// Coleta dados de todos os containers e stacks mapeadas no workspace de forma paralela e rápida.
 fn coletar_dados(
     cliente: &Cliente,
-    workspace: &Path,
+    stacks_cache: &[stacks::Stack],
+    info_host: Option<InfoHost>,
+    uso_disco: Option<UsoDiscoDocker>,
     coletor_app: &mut ColetorMetricasApp,
 ) -> ResultadoColeta {
     let containers = cliente.listar_containers(true)?;
     let mut linhas_containers = Vec::with_capacity(containers.len());
     let mut novas_amostras = Vec::new();
+
+    let ids_rodando: Vec<String> = containers
+        .iter()
+        .filter(|c| c.state == "running")
+        .map(|c| c.id.clone())
+        .collect();
+
+    let stats_map = cliente.obter_estatisticas_multiplos(&ids_rodando);
 
     for container in &containers {
         let id_curto = container.id[..12.min(container.id.len())].to_string();
@@ -1729,17 +2019,16 @@ fn coletar_dados(
         let stack_nome = container.labels.get("com.docker.compose.project").cloned();
 
         let (cpu, mem_mb, mem_limite_mb, mem_pct) = if container.state == "running" {
-            match cliente.obter_estatisticas(&container.id) {
-                Ok(stats) => {
-                    let cpu = calcular_uso_cpu(&stats);
-                    let (mem_usada_bytes, mem_limite_bytes) = memoria_efetiva(&stats);
-                    let mem_mb = mem_usada_bytes as f64 / 1_048_576.0;
-                    let mem_limite_mb = mem_limite_bytes as f64 / 1_048_576.0;
-                    let mem_pct = calcular_uso_memoria(&stats);
-                    novas_amostras.push((id_curto.clone(), cpu, mem_pct));
-                    (cpu, mem_mb, mem_limite_mb, mem_pct)
-                }
-                Err(_) => (0.0, 0.0, 0.0, 0.0),
+            if let Some(Ok(stats)) = stats_map.get(&container.id) {
+                let cpu = calcular_uso_cpu(stats);
+                let (mem_usada_bytes, mem_limite_bytes) = memoria_efetiva(stats);
+                let mem_mb = mem_usada_bytes as f64 / 1_048_576.0;
+                let mem_limite_mb = mem_limite_bytes as f64 / 1_048_576.0;
+                let mem_pct = calcular_uso_memoria(stats);
+                novas_amostras.push((id_curto.clone(), cpu, mem_pct));
+                (cpu, mem_mb, mem_limite_mb, mem_pct)
+            } else {
+                (0.0, 0.0, 0.0, 0.0)
             }
         } else {
             (0.0, 0.0, 0.0, 0.0)
@@ -1760,46 +2049,7 @@ fn coletar_dados(
         });
     }
 
-    let stacks_encontradas = stacks::varrer_workspace(workspace);
-    let mut linhas_stacks = Vec::with_capacity(stacks_encontradas.len());
-
-    for stack in stacks_encontradas {
-        let nome_stack_lower = stack.nome.to_lowercase();
-        let mut total = 0;
-        let mut rodando = 0;
-        let mut servicos = Vec::new();
-
-        for c in &containers {
-            let pertence = c
-                .labels
-                .get("com.docker.compose.project")
-                .map(|p| p.to_lowercase() == nome_stack_lower)
-                .unwrap_or(false);
-
-            if pertence {
-                total += 1;
-                if c.state == "running" {
-                    rodando += 1;
-                }
-                let nome_c = c
-                    .names
-                    .first()
-                    .map(|n| n.trim_start_matches('/').to_string())
-                    .unwrap_or_else(|| c.id[..12].to_string());
-                servicos.push((nome_c, c.state.clone()));
-            }
-        }
-
-        linhas_stacks.push(LinhaStack {
-            stack,
-            containers_total: total,
-            containers_rodando: rodando,
-            servicos,
-        });
-    }
-
-    let info_host = cliente.obter_info_host().ok();
-    let uso_disco = cliente.obter_uso_disco().ok();
+    let linhas_stacks = montar_linhas_stacks(stacks_cache, &containers);
     let metricas_app = Some(coletor_app.coletar());
 
     Ok((
@@ -2077,6 +2327,15 @@ fn desenhar(frame: &mut ratatui::Frame, ctx: &mut ContextoDesenho) {
                             "paused" => {
                                 Span::styled("⏸ pausado", Style::default().fg(Color::Yellow))
                             }
+                            "stopping" => {
+                                Span::styled("◌ parando...", Style::default().fg(Color::Yellow))
+                            }
+                            "starting" => {
+                                Span::styled("◌ iniciando...", Style::default().fg(Color::Cyan))
+                            }
+                            "restarting" => {
+                                Span::styled("◌ reiniciando...", Style::default().fg(Color::Cyan))
+                            }
                             outro => Span::styled(outro, Style::default().fg(Color::DarkGray)),
                         };
 
@@ -2205,7 +2464,17 @@ fn desenhar(frame: &mut ratatui::Frame, ctx: &mut ContextoDesenho) {
                 linhas_stacks
                     .iter()
                     .map(|linha| {
-                        let status_span = if linha.containers_total == 0 {
+                        let tem_stopping = linha.servicos.iter().any(|(_, e)| e == "stopping");
+                        let tem_starting = linha.servicos.iter().any(|(_, e)| e == "starting");
+                        let tem_restarting = linha.servicos.iter().any(|(_, e)| e == "restarting");
+
+                        let status_span = if tem_stopping {
+                            Span::styled("◌ Parando...", Style::default().fg(Color::Yellow))
+                        } else if tem_starting {
+                            Span::styled("◌ Iniciando...", Style::default().fg(Color::Cyan))
+                        } else if tem_restarting {
+                            Span::styled("◌ Reiniciando...", Style::default().fg(Color::Yellow))
+                        } else if linha.containers_total == 0 {
                             Span::styled("○ Não criada", Style::default().fg(Color::DarkGray))
                         } else if linha.containers_rodando == linha.containers_total {
                             Span::styled(
@@ -2294,7 +2563,11 @@ fn desenhar(frame: &mut ratatui::Frame, ctx: &mut ContextoDesenho) {
                         .servicos
                         .iter()
                         .map(|(nome, estado)| {
-                            let dot = if estado == "running" { "●" } else { "○" };
+                            let dot = match estado.as_str() {
+                                "running" => "●",
+                                "stopping" | "starting" | "restarting" => "◌",
+                                _ => "○",
+                            };
                             format!("{dot} {nome} ({estado})")
                         })
                         .collect::<Vec<String>>()

@@ -1,2 +1,0 @@
-02b9c770b06aef3343e73c2202a8a2cf3ab617aa1a56575e5a1b2a5e4dbc8759  docker_monitor-0.1.2-linux-x86_64.tar.gz
-57d22741a2b1d17c0893c72708c5fcb4fa205c5ffeac402972c792d82fb626b5  docker_monitor-0.1.2-windows-x86_64.zip

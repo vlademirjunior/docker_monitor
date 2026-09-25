@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use docker_monitor::client::Cliente;
 use docker_monitor::docker_api;
-use docker_monitor::{dashboard, formatador, logger, monitor, setup, stacks};
+use docker_monitor::{atualizar, dashboard, formatador, logger, monitor, setup, stacks};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -139,6 +139,15 @@ enum Comandos {
         #[command(subcommand)]
         acao: AcoesStack,
     },
+    /// Atualizar o programa para a versão mais recente publicada
+    Update {
+        /// Apenas verifica se há atualização, sem baixar nem alterar nada
+        #[arg(long)]
+        check: bool,
+        /// Atualiza sem pedir confirmação
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Instalar o binário no PATH do usuário (auto-instalador)
     Setup {
         /// Simula a instalação sem alterar nada
@@ -203,8 +212,10 @@ enum AcoesStack {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Argumentos::parse();
-    // `setup --sim` é uma simulação pura: nem o diretório de logs é criado.
-    if !matches!(args.comando, Comandos::Setup { sim: true }) {
+    // `setup --sim` e `update --check` são consultas puras: nem o diretório de logs é criado.
+    let puro = matches!(args.comando, Comandos::Setup { sim: true })
+        || matches!(args.comando, Comandos::Update { check: true, .. });
+    if !puro {
         // o Dashboard TUI é modelado como mais uma variante do enum de subcomandos, lado a lado com comandos convenciais de CLI.
         logger::init();
     }
@@ -232,12 +243,15 @@ fn executar(args: Argumentos) -> Result<(), Box<dyn std::error::Error>> {
         // O asterisco * serve para desreferenciar (dereference): ele "entra" no endereço de memória apontado por sim e copia o valor booleano real para passá-lo à função.
         return setup::instalar(*sim); // *sim (O desreferenciamento dentro do bloco)
     }
+    if let Comandos::Update { check, yes } = &args.comando {
+        return atualizar::executar(*check, *yes);
+    }
     if let Comandos::Stacks { acao } = &args.comando {
         return executar_stacks(acao, args.workspace.as_deref());
     }
-    // Por que esses dois comandos foram tratados antes do match?
+    // Por que esses comandos foram tratados antes do match?
     // Para executar comandos como Listar, Stats, Logs ou Parar, o programa precisa obrigatoriamente conectar na API do Docker `let cliente = match Cliente::automatico(args.url, args.socket) { ... };`
-    // Porém, comandos como Setup (instalar dependências/configuração) ou gerenciar arquivos locais de Stacks (templates de compose) não precisam do daemon do Docker rodando.
+    // Porém, comandos como Setup (instalar dependências/configuração) ou gerenciar arquivos locais de Stacks (templates de compose) ou atualizar o próprio binário (Update) não precisam do daemon do Docker rodando.
     // Tratá-los antes evita que o programa tente se conectar ao Docker à toa (e falhe com erro de conexão caso o Docker esteja desligado).
     let cliente = match Cliente::automatico(args.url, args.socket) {
         Ok(cliente) => {
@@ -440,8 +454,9 @@ fn executar(args: Argumentos) -> Result<(), Box<dyn std::error::Error>> {
         }
         // Exhaustive Pattern Matching: O compilador do Rust exige que todo match cubra 100% das variantes possíveis de um enum
         Comandos::Stacks { .. } => unreachable!("tratado antes do match"), // Os dois pontos seguidos (..) significam literalmente: "ignore todos os campos que estiverem aqui dentro, não preciso extrair nenhum deles para uma variável".
-        Comandos::Setup { .. } => unreachable!("tratado antes do match"), // O código compila e funciona exatamente igual hoje. No entanto, usar _ (Wildcard) nesse cenário específico é considerado uma má prática de manutenção em Rust.
-                                                                          // A maior vantagem do match exaustivo no Rust é funcionar como uma rede de segurança para se o projeto crescer, ajudando a evitar bugs e erros de compilação.
+        Comandos::Setup { .. } => unreachable!("tratado antes do match"),
+        Comandos::Update { .. } => unreachable!("tratado antes do match"), // O código compila e funciona exatamente igual hoje. No entanto, usar _ (Wildcard) nesse cenário específico é considerado uma má prática de manutenção em Rust.
+                                                                           // A maior vantagem do match exaustivo no Rust é funcionar como uma rede de segurança para se o projeto crescer, ajudando a evitar bugs e erros de compilação.
     }
     Ok(())
 }
@@ -715,6 +730,7 @@ fn nome_comando(comando: &Comandos) -> String {
         Comandos::Monitorar { .. } => "monitorar".to_string(),
         Comandos::Dashboard { .. } => "dashboard".to_string(),
         Comandos::Setup { .. } => "setup".to_string(),
+        Comandos::Update { .. } => "update".to_string(),
         Comandos::Stacks { acao } => match acao {
             AcoesStack::Listar => "stacks listar".to_string(),
             AcoesStack::Up { .. } => "stacks up".to_string(),

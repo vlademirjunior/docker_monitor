@@ -111,10 +111,14 @@ fn varrer_dir(dir: &Path, profundidade: usize, stacks: &mut Vec<Stack>) {
                     .parent()
                     .map(Path::to_path_buf)
                     .unwrap_or_else(|| dir.to_path_buf());
-                let nome_stack = diretorio
+                let nome_dir = diretorio
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "stack".to_string());
+                let conteudo = std::fs::read_to_string(&caminho).unwrap_or_default();
+                let nome_projeto = extrair_nome_projeto_de_conteudo(&conteudo)
+                    .or_else(|| extrair_env_var(&diretorio, "COMPOSE_PROJECT_NAME"));
+                let nome_stack = nome_projeto.unwrap_or(nome_dir);
                 let profiles = extrair_profiles(&caminho);
                 stacks.push(Stack {
                     nome: nome_stack,
@@ -125,6 +129,102 @@ fn varrer_dir(dir: &Path, profundidade: usize, stacks: &mut Vec<Stack>) {
             }
         }
     }
+}
+
+/// Extrai o nome do projeto definido na diretiva de topo `name:` de um compose.
+pub fn extrair_nome_projeto_de_conteudo(conteudo: &str) -> Option<String> {
+    for linha in conteudo.lines() {
+        // Apenas diretivas de topo (sem indentação)
+        if linha.starts_with("name:") {
+            let valor = linha["name:".len()..].trim();
+            // Remove aspas simples ou duplas se houver
+            let sem_aspas = valor.trim_matches(|c| c == '\'' || c == '"').trim();
+            // Trata substituição de variável estilo ${VAR:-padrao}
+            if sem_aspas.starts_with("${") && sem_aspas.ends_with('}') {
+                if let Some(idx) = sem_aspas.find(":-") {
+                    let padrao = &sem_aspas[idx + 2..sem_aspas.len() - 1];
+                    if !padrao.is_empty() {
+                        return Some(padrao.trim().to_string());
+                    }
+                }
+            } else if !sem_aspas.is_empty() && !sem_aspas.starts_with('$') {
+                return Some(sem_aspas.to_string());
+            }
+        }
+        // Se já entramos na seção services:, a diretiva name: no topo já teria passado
+        if linha.starts_with("services:") {
+            break;
+        }
+    }
+    None
+}
+
+/// Tenta ler uma variável de ambiente definida em um arquivo `.env` dentro do diretório.
+pub fn extrair_env_var(diretorio: &Path, var: &str) -> Option<String> {
+    let caminho_env = diretorio.join(".env");
+    let conteudo = std::fs::read_to_string(caminho_env).ok()?;
+    for linha in conteudo.lines() {
+        let linha = linha.trim();
+        if linha.starts_with('#') || linha.is_empty() {
+            continue;
+        }
+        if let Some(resto) = linha.strip_prefix(var) {
+            let resto = resto.trim_start();
+            if let Some(resto) = resto.strip_prefix('=') {
+                let valor = resto.trim().trim_matches(|c| c == '\'' || c == '"');
+                if !valor.is_empty() {
+                    return Some(valor.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Verifica se um container pertence a uma stack com base em seus labels.
+///
+/// A verificação é resiliente e verifica múltiplos metadados definidos pelo Docker Compose:
+/// 1. `com.docker.compose.project.config_files` correspondendo ao arquivo da stack.
+/// 2. `com.docker.compose.project.working_dir` correspondendo ao diretório da stack.
+/// 3. `com.docker.compose.project` correspondendo ao nome da stack (case-insensitive).
+/// 4. `com.docker.compose.project` correspondendo ao nome do diretório da stack (case-insensitive).
+pub fn container_pertence_a_stack(
+    labels: &std::collections::HashMap<String, String>,
+    stack: &Stack,
+) -> bool {
+    // 1. Arquivo de configuração exato
+    if let Some(config_files) = labels.get("com.docker.compose.project.config_files") {
+        let arquivo_str = stack.arquivo.to_string_lossy();
+        for cf in config_files.split(',') {
+            let cf_trim = cf.trim();
+            if cf_trim == arquivo_str.as_ref() || Path::new(cf_trim) == stack.arquivo {
+                return true;
+            }
+        }
+    }
+
+    // 2. Diretório de trabalho do Compose
+    if let Some(working_dir) = labels.get("com.docker.compose.project.working_dir") {
+        let dir_str = stack.diretorio.to_string_lossy();
+        if working_dir.as_str() == dir_str.as_ref() || Path::new(working_dir) == stack.diretorio {
+            return true;
+        }
+    }
+
+    // 3. Nome do projeto compose
+    if let Some(project) = labels.get("com.docker.compose.project") {
+        let proj_lower = project.to_lowercase();
+        if proj_lower == stack.nome.to_lowercase() {
+            return true;
+        }
+        if let Some(dir_nome) = stack.diretorio.file_name().and_then(|n| n.to_str()) {
+            if proj_lower == dir_nome.to_lowercase() {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 /// Extrai a lista de profiles declarados em um arquivo docker-compose.
@@ -244,6 +344,18 @@ pub fn encontrar_stack<'a>(
         .iter()
         .find(|stack| stack.nome.to_lowercase() == procurado);
     if let Some(stack) = por_nome {
+        return Ok(stack);
+    }
+    // Também procura por nome de diretório exato caso o nome da stack tenha vindo de name: no compose
+    let por_dir_nome = stacks.iter().find(|stack| {
+        stack
+            .diretorio
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.to_lowercase() == procurado)
+            .unwrap_or(false)
+    });
+    if let Some(stack) = por_dir_nome {
         return Ok(stack);
     }
     let alvo = Path::new(nome_ou_caminho);
@@ -1034,5 +1146,86 @@ services:
             montar_workspace(None),
             std::env::temp_dir().join("workspace")
         );
+    }
+
+    #[test]
+    fn extrai_nome_projeto_com_diferentes_formatos() {
+        // Nome simples
+        assert_eq!(
+            extrair_nome_projeto_de_conteudo("name: meu-projeto\nservices: {}"),
+            Some("meu-projeto".to_string())
+        );
+        // Aspas duplas
+        assert_eq!(
+            extrair_nome_projeto_de_conteudo("name: \"projeto-aspas\"\nservices: {}"),
+            Some("projeto-aspas".to_string())
+        );
+        // Aspas simples
+        assert_eq!(
+            extrair_nome_projeto_de_conteudo("name: 'projeto-simples'\nservices: {}"),
+            Some("projeto-simples".to_string())
+        );
+        // Variável com default
+        assert_eq!(
+            extrair_nome_projeto_de_conteudo("name: ${COMPOSE_PROJECT_NAME:-nomural}\nservices: {}"),
+            Some("nomural".to_string())
+        );
+        // Comentários e ausente
+        assert_eq!(
+            extrair_nome_projeto_de_conteudo("# name: falso\nservices:\n  web:\n    name: dentro"),
+            None
+        );
+    }
+
+    #[test]
+    fn container_pertence_a_stack_valida_multiplos_criterios() {
+        use std::collections::HashMap;
+
+        let stack = Stack {
+            nome: "nomural-landing-local".to_string(),
+            arquivo: PathBuf::from("/home/vlad/workspace/vizinho/landing/docker-compose.yml"),
+            diretorio: PathBuf::from("/home/vlad/workspace/vizinho/landing"),
+            profiles: Vec::new(),
+        };
+
+        // 1. Por config_files
+        let mut labels = HashMap::new();
+        labels.insert(
+            "com.docker.compose.project.config_files".to_string(),
+            "/home/vlad/workspace/vizinho/landing/docker-compose.yml".to_string(),
+        );
+        assert!(container_pertence_a_stack(&labels, &stack));
+
+        // 2. Por working_dir
+        let mut labels = HashMap::new();
+        labels.insert(
+            "com.docker.compose.project.working_dir".to_string(),
+            "/home/vlad/workspace/vizinho/landing".to_string(),
+        );
+        assert!(container_pertence_a_stack(&labels, &stack));
+
+        // 3. Por project name (igual ao stack.nome)
+        let mut labels = HashMap::new();
+        labels.insert(
+            "com.docker.compose.project".to_string(),
+            "nomural-landing-local".to_string(),
+        );
+        assert!(container_pertence_a_stack(&labels, &stack));
+
+        // 4. Por project name (igual ao nome do diretório 'landing')
+        let mut labels = HashMap::new();
+        labels.insert(
+            "com.docker.compose.project".to_string(),
+            "landing".to_string(),
+        );
+        assert!(container_pertence_a_stack(&labels, &stack));
+
+        // 5. Container de outra stack não pertence
+        let mut labels = HashMap::new();
+        labels.insert(
+            "com.docker.compose.project".to_string(),
+            "outro-projeto".to_string(),
+        );
+        assert!(!container_pertence_a_stack(&labels, &stack));
     }
 }

@@ -152,6 +152,21 @@ Settings → General → ative "Expose daemon on tcp://localhost:2375
 without TLS" → Apply & restart (no Windows o programa fala com o daemon
 via TCP, pois não há socket Unix). Então `dm listar` funciona.
 
+## Atualizar (`dm update`)
+
+Quem instalou via `setup` atualiza para a versão publicada mais recente com:
+
+```bash
+dm update            # baixa, verifica o checksum e instala
+dm update --check    # só consulta, sem alterar nada
+dm update --yes      # sem confirmação (scripts)
+```
+
+O `update` funciona sem o Docker rodando e sem Rust instalado; no Windows
+ele também refresca a cópia `dm.exe`. Cada release é publicada a partir de
+uma tag `vX.Y.Z` (veja "Gerar os pacotes"), e o `update` só instala quando
+a versão publicada é mais nova que a instalada.
+
 ## Instalação para desenvolvedores (setup.sh)
 
 O script de setup compila do fonte em release, instala o binário em
@@ -188,8 +203,14 @@ sudo apt install gcc-mingw-w64-x86-64   # Debian/Ubuntu
 ./scripts/build-dist.sh
 ```
 
-Isso compila os dois alvos em release e gera em `dist/` (ignorado no git)
+Isso compila os dois alvos em release e gera em `dist/`
 os dois pacotes + `sha256sums.txt`, já verificados (checksums, ELF/PE32).
+
+Para publicar uma release: atualize a versão em `Cargo.toml` e o
+`CHANGELOG.md`, commite, e suba a tag correspondente (`git tag vX.Y.Z &&
+git push origin vX.Y.Z`). O workflow `Release` compila os dois alvos,
+valida a tag contra o `Cargo.toml` e publica a GitHub Release com os 3
+assets — é de lá que o `dm update` baixa.
 
 ## Compilar e rodar (desenvolvimento)
 

@@ -13,7 +13,9 @@ use http_body_util::{BodyExt, Full};
 use hyper_util::client::legacy::Client;
 use hyperlocal::{UnixClientExt, UnixConnector, Uri};
 use serde::de::DeserializeOwned;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::docker_api::{
     ContainerResumo, DetalhesContainer, EstatisticasContainer, ImagemResumo, InfoHost,
@@ -24,10 +26,11 @@ use crate::docker_api::{
 type Corpo = Full<Bytes>;
 
 /// Cliente para a API Docker via socket Unix.
+#[derive(Clone)]
 pub struct ClienteSocketUnix {
     socket: PathBuf,
     cliente: Client<UnixConnector, Corpo>,
-    runtime: tokio::runtime::Runtime,
+    runtime: Arc<tokio::runtime::Runtime>,
 }
 
 impl ClienteSocketUnix {
@@ -46,13 +49,14 @@ impl ClienteSocketUnix {
             )
             .into());
         }
-        let runtime = tokio::runtime::Builder::new_current_thread()
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
             .enable_all()
             .build()?;
         Ok(ClienteSocketUnix {
             socket: socket.to_path_buf(),
             cliente: Client::unix(),
-            runtime,
+            runtime: Arc::new(runtime),
         })
     }
 
@@ -144,6 +148,69 @@ impl ClienteSocketUnix {
         container_id: &str,
     ) -> Result<EstatisticasContainer, Box<dyn std::error::Error>> {
         self.get_json(&format!("/containers/{container_id}/stats?stream=false"))
+    }
+
+    /// Obtém estatísticas de múltiplos containers em paralelo via socket Unix.
+    pub fn obter_estatisticas_multiplos(
+        &self,
+        ids: &[String],
+    ) -> HashMap<String, Result<EstatisticasContainer, String>> {
+        if ids.is_empty() {
+            return HashMap::new();
+        }
+
+        let socket = self.socket.clone();
+        let cliente = self.cliente.clone();
+        let ids_vec = ids.to_vec();
+
+        self.runtime.block_on(async move {
+            let mut handles = Vec::with_capacity(ids_vec.len());
+            for id in ids_vec {
+                let s = socket.clone();
+                let c = cliente.clone();
+                let id_clone = id.clone();
+
+                handles.push(tokio::spawn(async move {
+                    let uri: http::Uri = Uri::new(&s, &format!("/containers/{id_clone}/stats?stream=false")).into();
+                    let requisicao = match http::Request::builder()
+                        .method("GET")
+                        .uri(uri)
+                        .body(Corpo::new(Bytes::new()))
+                    {
+                        Ok(req) => req,
+                        Err(e) => return (id_clone, Err(format!("requisição inválida: {e}"))),
+                    };
+
+                    let resposta = match c.request(requisicao).await {
+                        Ok(resp) => resp,
+                        Err(e) => return (id_clone, Err(format!("falha de conexão: {e}"))),
+                    };
+
+                    let status = resposta.status();
+                    let corpo = match resposta.into_body().collect().await {
+                        Ok(collected) => collected.to_bytes(),
+                        Err(e) => return (id_clone, Err(format!("falha ao ler corpo: {e}"))),
+                    };
+
+                    if !status.is_success() {
+                        return (id_clone, Err(format!("status {status}: {}", String::from_utf8_lossy(&corpo))));
+                    }
+
+                    match serde_json::from_slice::<EstatisticasContainer>(&corpo) {
+                        Ok(stats) => (id_clone, Ok(stats)),
+                        Err(e) => (id_clone, Err(format!("JSON inválido: {e}"))),
+                    }
+                }));
+            }
+
+            let mut resultados = HashMap::with_capacity(handles.len());
+            for handle in handles {
+                if let Ok((id, res)) = handle.await {
+                    resultados.insert(id, res);
+                }
+            }
+            resultados
+        })
     }
 
     /// Obtém detalhes completos de um container.
@@ -250,10 +317,12 @@ mod testes {
         let cliente = ClienteSocketUnix {
             socket: PathBuf::from("/var/run/docker.sock"),
             cliente: Client::unix(),
-            runtime: tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
+            runtime: Arc::new(
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap(),
+            ),
         };
         let uri = cliente.uri("/containers/json?all=true");
         assert!(
@@ -261,5 +330,21 @@ mod testes {
             "{}",
             uri
         );
+    }
+
+    #[test]
+    fn obter_estatisticas_multiplos_vazio_retorna_mapa_vazio() {
+        let cliente = ClienteSocketUnix {
+            socket: PathBuf::from("/var/run/docker.sock"),
+            cliente: Client::unix(),
+            runtime: Arc::new(
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap(),
+            ),
+        };
+        let res = cliente.obter_estatisticas_multiplos(&[]);
+        assert!(res.is_empty());
     }
 }

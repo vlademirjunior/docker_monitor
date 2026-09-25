@@ -5,6 +5,7 @@
 //! `DOCKER_HOST` é informado). No Windows, somente TCP é suportado. A
 //! interface espelha os dois clientes.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::docker_api::{
@@ -15,6 +16,7 @@ use crate::docker_api::{
 use crate::docker_socket::ClienteSocketUnix;
 
 /// Cliente Docker com seleção automática de transporte.
+#[derive(Clone)]
 pub enum Cliente {
     /// Comunicação via socket Unix (`/var/run/docker.sock`; somente Unix).
     #[cfg(unix)]
@@ -96,6 +98,18 @@ impl Cliente {
             #[cfg(unix)]
             Cliente::Unix(cliente) => cliente.obter_estatisticas(container_id),
             Cliente::Tcp(cliente) => cliente.obter_estatisticas(container_id),
+        }
+    }
+
+    /// Obtém estatísticas de múltiplos containers em paralelo.
+    pub fn obter_estatisticas_multiplos(
+        &self,
+        ids: &[String],
+    ) -> HashMap<String, Result<EstatisticasContainer, String>> {
+        match self {
+            #[cfg(unix)]
+            Cliente::Unix(cliente) => cliente.obter_estatisticas_multiplos(ids),
+            Cliente::Tcp(cliente) => cliente.obter_estatisticas_multiplos(ids),
         }
     }
 

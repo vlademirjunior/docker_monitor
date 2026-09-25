@@ -444,6 +444,7 @@ pub struct ImagemResumo {
 }
 
 /// Cliente para a API Docker via TCP (HTTP).
+#[derive(Clone)]
 pub struct ClienteDocker {
     url_base: String,
     cliente: reqwest::blocking::Client,
@@ -478,21 +479,6 @@ impl ClienteDocker {
         &self,
         todos: bool,
     ) -> Result<Vec<ContainerResumo>, Box<dyn std::error::Error>> {
-        // Esse tipo de retorno é a maneira elegante e segura que o Rust usa para lidar com operações que podem dar errado (como fazer uma requisição na internet ou ler um arquivo).
-        // No Rust, não existem blocos try/catch ou Exceptions escondidas; tudo é explícito na assinatura da função.
-        // ---> Result<Sucesso, Erro> <---
-        // O Result é um tipo embutido no Rust chamado de Enum. Ele obriga o programa a lidar com dois cenários possíveis no fim da execução da função:
-        // Ok(dados): A função funcionou perfeitamente e está devolvendo os dados esperados.
-        // Err(motivo): A função falhou e está devolvendo os detalhes do erro.
-        // Quando a gente usa Result, o compilador do Rust se recusa a compilar o programa se a gente não escrever um código que trate o caso de erro, garantindo que seu programa não quebre de surpresa.
-        // ---> Box<dyn std::error::Error> <---
-        // Como a nossa função faz várias coisas (conecta na rede via reqwest, converte texto via serde_json, etc.), vários tipos de erros diferentes podem acontecer.
-        // O Rust exige saber o tamanho exato de tudo na memória, mas como ele vai saber se o erro que vai acontecer é um pequeno aviso de rede ou um texto gigante de falha de conversão?
-        // std::error::Error: É o padrão (a interface) básico para qualquer tipo de erro no Rust.
-        // dyn (Dynamic): Significa "Dinâmico". A gente está dizendo ao Rust: "Eu não sei qual erro exato vai acontecer, pode ser do reqwest, pode ser do serde, apenas aceite qualquer coisa que seja classificada como Erro".
-        // Box: Como o Rust não sabe o tamanho desse "erro dinâmico", o Box pega esse erro, joga em uma área livre da memória (o heap) e entrega para a função apenas um "ponteiro" (um endereço) de tamanho fixo.
-        // O Box é literalmente uma "caixa" de tamanho padrão onde a gente pode esconder erros de qualquer tamanho dentro.
-
         let url = format!("{}/containers/json?all={}", self.url_base, todos);
         let resposta = self.cliente.get(&url).send()?;
 
@@ -507,7 +493,7 @@ impl ClienteDocker {
 
         let containers: Vec<ContainerResumo> = resposta.json()?;
 
-        Ok(containers) // Se a chamada para a API do Docker for bem-sucedida, a gente receberá de volta uma lista "Vec<ContainerResumo>" com vários containers.
+        Ok(containers)
     }
 
     /// Obtém estatísticas de uso de recursos de um container.
@@ -522,6 +508,51 @@ impl ClienteDocker {
         let resposta = self.cliente.get(&url).send()?;
         let stats: EstatisticasContainer = resposta.json()?;
         Ok(stats)
+    }
+
+    /// Obtém estatísticas de múltiplos containers em paralelo via threads.
+    pub fn obter_estatisticas_multiplos(
+        &self,
+        ids: &[String],
+    ) -> HashMap<String, Result<EstatisticasContainer, String>> {
+        if ids.is_empty() {
+            return HashMap::new();
+        }
+
+        std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(ids.len());
+            for id in ids {
+                let url = format!("{}/containers/{id}/stats?stream=false", self.url_base);
+                let client = self.cliente.clone();
+                let id_clone = id.clone();
+
+                handles.push(s.spawn(move || {
+                    let res = match client.get(&url).send() {
+                        Ok(resp) => {
+                            let status = resp.status();
+                            if !status.is_success() {
+                                Err(format!("status {status}"))
+                            } else {
+                                match resp.json::<EstatisticasContainer>() {
+                                    Ok(stats) => Ok(stats),
+                                    Err(e) => Err(format!("JSON inválido: {e}")),
+                                }
+                            }
+                        }
+                        Err(e) => Err(format!("falha na conexão: {e}")),
+                    };
+                    (id_clone, res)
+                }));
+            }
+
+            let mut mapa = HashMap::with_capacity(handles.len());
+            for handle in handles {
+                if let Ok((id, res)) = handle.join() {
+                    mapa.insert(id, res);
+                }
+            }
+            mapa
+        })
     }
 
     /// Obtém detalhes completos de um container.
