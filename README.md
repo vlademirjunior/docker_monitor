@@ -116,6 +116,7 @@ class node_host,node_self_metrics,node_logger,node_operator,node_daemon,node_com
 ## Documentação do projeto
 
 - [Changelog](CHANGELOG.md): histórico de versões e funcionalidades.
+- [Release](RELEASE.md): como publicar e corrigir releases.
 - [Contribuindo](CONTRIBUTING.md): ambiente, validações e fluxo de contribuição.
 - [LICENSE](LICENSE): licença MIT do projeto.
 
